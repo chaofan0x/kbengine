@@ -52,6 +52,14 @@ flags_(COORDINATE_NODE_FLAG_UNKNOWN)
 //-------------------------------------------------------------------------------------
 CoordinateNode::~CoordinateNode()
 {
+	//DEBUG_MSG(fmt::format("CoordinateNode::~CoordinateNode(), addr = {}, desc = {}\n", (void*)this, descr_));
+	KBE_ASSERT(pPrevX_ == NULL &&
+			   pNextX_ == NULL &&
+			   pPrevY_ == NULL &&
+			   pNextY_ == NULL &&
+			   pPrevZ_ == NULL &&
+			   pNextZ_ == NULL &&
+			   pCoordinateSystem_ == NULL);
 }
 
 //-------------------------------------------------------------------------------------
@@ -64,9 +72,11 @@ void CoordinateNode::update()
 //-------------------------------------------------------------------------------------
 std::string CoordinateNode::c_str()
 {
-	return fmt::format("CoordinateNode::c_str(): {:p} curr({}, {}, {}), old({}, {}, {}) pPreX={:p} pNextX={:p} pPreZ={:p} pNextZ={:p} flags={} descr={}\n",
+	return fmt::format("CoordinateNode::c_str(): {:p} curr({}, {}, {}), {}, pPreX={:p} pNextX={:p} pPreZ={:p} pNextZ={:p} flags={} descr={}\n",
 		(void*)this, x(), y(), z(),
-		old_xx_, old_yy_, old_zz_,
+		fmt::format("xxyyzz({}, {}, {}), old_xxyyzz({}, {}, {})",
+		xx(), yy(), zz(),
+		old_xx(), old_yy(), old_zz()),
 		(void*)pPrevX_, (void*)pNextX_, (void*)pPrevZ_, (void*)pNextZ_, flags_, descr());
 }
 
@@ -141,8 +151,8 @@ void CoordinateNode::onRemove()
 	old_zz(z_);
 
 	x_ = -FLT_MAX;
-	y_ = -FLT_MAX;
-	z_ = -FLT_MAX;
+	//y_ = -FLT_MAX;
+	//z_ = -FLT_MAX;
 }
 
 //-------------------------------------------------------------------------------------

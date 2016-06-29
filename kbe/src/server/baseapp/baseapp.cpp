@@ -67,55 +67,93 @@ PyObject* createCellDataDictFromPersistentStream(MemoryStream& s, const char* en
 	ScriptDefModule::PROPERTYDESCRIPTION_MAP& propertyDescrs = pScriptModule->getPersistentPropertyDescriptions();
 	ScriptDefModule::PROPERTYDESCRIPTION_MAP::const_iterator iter = propertyDescrs.begin();
 
-	for(; iter != propertyDescrs.end(); ++iter)
+	try
 	{
-		PropertyDescription* propertyDescription = iter->second;
-
-		const char* attrname = propertyDescription->getName();
-
-		PyObject* pyVal = propertyDescription->createFromPersistentStream(&s);
-
-		if(!propertyDescription->getDataType()->isSameType(pyVal))
+		for (; iter != propertyDescrs.end(); ++iter)
 		{
-			if(pyVal)
-			{
-				Py_DECREF(pyVal);
-			}
-			
-			ERROR_MSG(fmt::format("Baseapp::createCellDataDictFromPersistentStream: {}.{} is error, set to default!\n", 
-				entityType, attrname));
+			PropertyDescription* propertyDescription = iter->second;
 
-			pyVal = propertyDescription->getDataType()->parseDefaultStr("");
+			const char* attrname = propertyDescription->getName();
+
+			PyObject* pyVal = propertyDescription->createFromPersistentStream(&s);
+
+			if (!propertyDescription->getDataType()->isSameType(pyVal))
+			{
+				if (pyVal)
+				{
+					Py_DECREF(pyVal);
+				}
+
+				ERROR_MSG(fmt::format("Baseapp::createCellDataDictFromPersistentStream: {}.{} error, set to default!\n",
+					entityType, attrname));
+
+				pyVal = propertyDescription->getDataType()->parseDefaultStr("");
+			}
+
+			PyDict_SetItemString(pyDict, attrname, pyVal);
+			Py_DECREF(pyVal);
 		}
 
-		PyDict_SetItemString(pyDict, attrname, pyVal);
-		Py_DECREF(pyVal);
-	}
-	
-	if(pScriptModule->hasCell())
-	{
-		ArraySize size = 0;
+		if (pScriptModule->hasCell())
+		{
+			ArraySize size = 0;
 #ifdef CLIENT_NO_FLOAT
-		int32 v1, v2, v3;
-		int32 vv1, vv2, vv3;
+			int32 v1, v2, v3;
+			int32 vv1, vv2, vv3;
 #else
-		float v1, v2, v3;
-		float vv1, vv2, vv3;
+			float v1, v2, v3;
+			float vv1, vv2, vv3;
 #endif
-		
-		s >> size >> v1 >> v2 >> v3;
-		s >> size >> vv1 >> vv2 >> vv3;
+
+			s >> size >> v1 >> v2 >> v3;
+			s >> size >> vv1 >> vv2 >> vv3;
+
+			PyObject* position = PyTuple_New(3);
+			PyTuple_SET_ITEM(position, 0, PyFloat_FromDouble((float)v1));
+			PyTuple_SET_ITEM(position, 1, PyFloat_FromDouble((float)v2));
+			PyTuple_SET_ITEM(position, 2, PyFloat_FromDouble((float)v3));
+
+			PyObject* direction = PyTuple_New(3);
+			PyTuple_SET_ITEM(direction, 0, PyFloat_FromDouble((float)vv1));
+			PyTuple_SET_ITEM(direction, 1, PyFloat_FromDouble((float)vv2));
+			PyTuple_SET_ITEM(direction, 2, PyFloat_FromDouble((float)vv3));
+
+			PyDict_SetItemString(pyDict, "position", position);
+			PyDict_SetItemString(pyDict, "direction", direction);
+
+			Py_DECREF(position);
+			Py_DECREF(direction);
+		}
+	}
+	catch (MemoryStreamException & e)
+	{
+		e.PrintPosError();
+
+		for (; iter != propertyDescrs.end(); ++iter)
+		{
+			PropertyDescription* propertyDescription = iter->second;
+
+			const char* attrname = propertyDescription->getName();
+
+			ERROR_MSG(fmt::format("Baseapp::createCellDataDictFromPersistentStream: set({}.{}) to default!\n",
+				entityType, attrname));
+
+			PyObject* pyVal = propertyDescription->getDataType()->parseDefaultStr("");
+
+			PyDict_SetItemString(pyDict, attrname, pyVal);
+			Py_DECREF(pyVal);
+		}
 
 		PyObject* position = PyTuple_New(3);
-		PyTuple_SET_ITEM(position, 0, PyFloat_FromDouble((float)v1));
-		PyTuple_SET_ITEM(position, 1, PyFloat_FromDouble((float)v2));
-		PyTuple_SET_ITEM(position, 2, PyFloat_FromDouble((float)v3));
-		
+		PyTuple_SET_ITEM(position, 0, PyFloat_FromDouble(0.f));
+		PyTuple_SET_ITEM(position, 1, PyFloat_FromDouble(0.f));
+		PyTuple_SET_ITEM(position, 2, PyFloat_FromDouble(0.f));
+
 		PyObject* direction = PyTuple_New(3);
-		PyTuple_SET_ITEM(direction, 0, PyFloat_FromDouble((float)vv1));
-		PyTuple_SET_ITEM(direction, 1, PyFloat_FromDouble((float)vv2));
-		PyTuple_SET_ITEM(direction, 2, PyFloat_FromDouble((float)vv3));
-		
+		PyTuple_SET_ITEM(direction, 0, PyFloat_FromDouble(0.f));
+		PyTuple_SET_ITEM(direction, 1, PyFloat_FromDouble(0.f));
+		PyTuple_SET_ITEM(direction, 2, PyFloat_FromDouble(0.f));
+
 		PyDict_SetItemString(pyDict, "position", position);
 		PyDict_SetItemString(pyDict, "direction", direction);
 
@@ -2278,7 +2316,7 @@ PyObject* Baseapp::__py_charge(PyObject* self, PyObject* args)
 {
 	if(PyTuple_Size(args) != 4)
 	{
-		PyErr_Format(PyExc_TypeError, "KBEngine::charge: args != (ordersID, dbid, byteDatas[bytes|BLOB], pycallback)!");
+		PyErr_Format(PyExc_TypeError, "KBEngine::charge: args != (ordersID, dbid, byteDatas[bytes], pycallback)!");
 		PyErr_PrintEx(0);
 		return NULL;
 	}
@@ -2315,9 +2353,9 @@ PyObject* Baseapp::__py_charge(PyObject* self, PyObject* args)
 		return NULL;
 	}
 
-	if (!PyBytes_Check(pyDatas) && !PyObject_TypeCheck(pyDatas, script::PyMemoryStream::getScriptType()))
+	if (!PyBytes_Check(pyDatas))
 	{
-		PyErr_Format(PyExc_TypeError, "KBEngine::charge: byteDatas != bytes|BLOB!");
+		PyErr_Format(PyExc_TypeError, "KBEngine::charge: byteDatas != bytes!");
 		PyErr_PrintEx(0);
 		return NULL;
 	}
@@ -2331,24 +2369,16 @@ PyObject* Baseapp::__py_charge(PyObject* self, PyObject* args)
 
 	std::string datas;
 
-	if(!PyBytes_Check(pyDatas))
-	{
-		script::PyMemoryStream* pPyMemoryStream = static_cast<script::PyMemoryStream*>(pyDatas);
-		pPyMemoryStream->stream().readBlob(datas);
-	}
-	else
-	{
-		char *buffer;
-		Py_ssize_t length;
+	char *buffer;
+	Py_ssize_t length;
 
-		if(PyBytes_AsStringAndSize(pyDatas, &buffer, &length) < 0)
-		{
-			SCRIPT_ERROR_CHECK();
-			return NULL;
-		}
-
-		datas.assign(buffer, length);
+	if(PyBytes_AsStringAndSize(pyDatas, &buffer, &length) < 0)
+	{
+		SCRIPT_ERROR_CHECK();
+		return NULL;
 	}
+
+	datas.assign(buffer, length);
 
 	if(Baseapp::getSingleton().isShuttingdown())
 	{
@@ -2419,7 +2449,7 @@ void Baseapp::onChargeCB(Network::Channel* pChannel, KBEngine::MemoryStream& s)
 	PyObject* pyOrder = PyUnicode_FromString(chargeID.c_str());
 	PyObject* pydbid = PyLong_FromUnsignedLongLong(dbid);
 	PyObject* pySuccess = PyBool_FromLong((retcode == SERVER_SUCCESS));
-	script::PyMemoryStream* pPyMemoryStream = new script::PyMemoryStream(datas);
+	PyObject* pyBytes = PyBytes_FromStringAndSize(datas.data(), datas.length());
 
 	if(callbackID > 0)
 	{
@@ -2430,7 +2460,7 @@ void Baseapp::onChargeCB(Network::Channel* pChannel, KBEngine::MemoryStream& s)
 			SCOPED_PROFILE(SCRIPTCALL_PROFILE);
 			PyObject* pyResult = PyObject_CallFunction(pycallback.get(), 
 												const_cast<char*>("OOOO"), 
-												pyOrder, pydbid, pySuccess, static_cast<PyObject*>(pPyMemoryStream));
+												pyOrder, pydbid, pySuccess, pyBytes);
 
 			if(pyResult != NULL)
 				Py_DECREF(pyResult);
@@ -2449,7 +2479,7 @@ void Baseapp::onChargeCB(Network::Channel* pChannel, KBEngine::MemoryStream& s)
 		PyObject* pyResult = PyObject_CallMethod(getEntryScript().get(), 
 										const_cast<char*>("onLoseChargeCB"), 
 										const_cast<char*>("OOOO"), 
-										pyOrder, pydbid, pySuccess, static_cast<PyObject*>(pPyMemoryStream));
+										pyOrder, pydbid, pySuccess, pyBytes);
 
 		if(pyResult != NULL)
 			Py_DECREF(pyResult);
@@ -2460,7 +2490,7 @@ void Baseapp::onChargeCB(Network::Channel* pChannel, KBEngine::MemoryStream& s)
 	Py_DECREF(pyOrder);
 	Py_DECREF(pydbid);
 	Py_DECREF(pySuccess);
-	Py_DECREF(pPyMemoryStream);
+	Py_DECREF(pyBytes);
 }
 
 //-------------------------------------------------------------------------------------
@@ -3109,7 +3139,7 @@ void Baseapp::forwardMessageToClientFromCellapp(Network::Channel* pChannel,
 	Network::Channel* pClientChannel = mailbox->getChannel();
 	Network::Bundle* pSendBundle = NULL;
 	
-	if (!pClientChannel || pBufferedSendToClientMessages)
+	if (true/*!pClientChannel || pBufferedSendToClientMessages*/)
 		pSendBundle = Network::Bundle::createPoolObject();
 	else
 		pSendBundle = pClientChannel->createSendBundle();
@@ -3297,7 +3327,8 @@ void Baseapp::onEntityMail(Network::Channel* pChannel, KBEngine::MemoryStream& s
 				Network::Channel* pChannel = mailbox->getChannel();
 				if (pChannel)
 				{
-					Network::Bundle* pBundle = pChannel->createSendBundle();
+					//Network::Bundle* pBundle = pChannel->createSendBundle();
+					Network::Bundle* pBundle = Network::Bundle::createPoolObject();
 					mailbox->newMail(*pBundle);
 					pBundle->append(s);
 
@@ -3395,6 +3426,46 @@ void Baseapp::onUpdateDataFromClient(Network::Channel* pChannel, KBEngine::Memor
 
 	Network::Bundle* pBundle = Network::Bundle::createPoolObject();
 	(*pBundle).newMessage(CellappInterface::onUpdateDataFromClient);
+	(*pBundle) << srcEntityID;
+	(*pBundle).append(s);
+	
+	e->sendToCellapp(pBundle);
+	s.done();
+}
+
+void Baseapp::onUpdateDataFromClientForControlledEntity(Network::Channel* pChannel, KBEngine::MemoryStream& s)
+{
+	ENTITY_ID srcEntityID = pChannel->proxyID();
+	if(srcEntityID <= 0)
+	{
+		s.done();
+		return;
+	}
+	
+	static size_t datasize = (sizeof(int32) + sizeof(float) * 6 + sizeof(uint8) + sizeof(uint32));
+	if(s.length() <= 0 || s.length() != datasize)
+	{
+		ERROR_MSG(fmt::format("Baseapp::onUpdateDataFromClientForControlledEntity: invalid data, size({} != {}), srcEntityID={}.\n",
+			datasize, s.length(), srcEntityID));
+
+		s.done();
+		return;
+	}
+
+	KBEngine::Proxy* e = static_cast<KBEngine::Proxy*>
+			(KBEngine::Baseapp::getSingleton().findEntity(srcEntityID));	
+
+	if(e == NULL || e->cellMailbox() == NULL)
+	{
+		ERROR_MSG(fmt::format("Baseapp::onUpdateDataFromClientForControlledEntity: {} {} has no cell.\n",
+			(e == NULL ? "unknown" : e->scriptName()), srcEntityID));
+		
+		s.done();
+		return;
+	}
+
+	Network::Bundle* pBundle = Network::Bundle::ObjPool().createObject();
+	(*pBundle).newMessage(CellappInterface::onUpdateDataFromClientForControlledEntity);
 	(*pBundle) << srcEntityID;
 	(*pBundle).append(s);
 	
