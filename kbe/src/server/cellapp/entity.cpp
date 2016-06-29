@@ -233,6 +233,9 @@ void Entity::onDestroy(bool callScript)
 	// 在进程强制关闭时这里可能不为0
 	//KBE_ASSERT(spaceID() == 0);
 
+	// 此时不应该还有witnesses，否则为AOI BUG
+	KBE_ASSERT(witnesses_count_ == 0);
+	
 	pPyPosition_->onLoseRef();
 	pPyDirection_->onLoseRef();
 }
@@ -246,17 +249,23 @@ PyObject* Entity::__py_pyDestroyEntity(PyObject* self, PyObject* args, PyObject 
 	if(pobj->initing())
 	{
 		PyErr_Format(PyExc_AssertionError,
-			"Entity::destroy(): %s is in initing, reject the request!\n",	
-			pobj->scriptName());
+			"%s::destroy(): %d initing, reject the request!\n",
+			pobj->scriptName(), pobj->id());
 		PyErr_PrintEx(0);
 		return NULL;
 	}
-
-	if(currargsSize > 0)
+	else if (pobj->isDestroyed())
+	{
+		PyErr_Format(PyExc_AssertionError, "%s::destroy: %d is destroyed!\n",
+			pobj->scriptName(), pobj->id());
+		PyErr_PrintEx(0);
+		return NULL;
+	}
+	else if(currargsSize > 0)
 	{
 		PyErr_Format(PyExc_AssertionError,
-						"%s: args max require %d args, gived %d! is script[%s].\n",	
-			__FUNCTION__, 0, currargsSize, pobj->scriptName());
+			"%s: args max require %d args, gived %d! is script(%s), id(%d)!\n",	
+			__FUNCTION__, 0, currargsSize, pobj->scriptName(), pobj->id());
 		PyErr_PrintEx(0);
 		return NULL;
 	}
@@ -444,26 +453,22 @@ void Entity::onDefDataChanged(const PropertyDescription* propertyDescription, Py
 	// 只有在cell边界一定范围内的entity才拥有ghost实体, 或者在跳转space时也会短暂的置为ghost状态
 	if((flags & ENTITY_BROADCAST_CELL_FLAGS) > 0 && hasGhost())
 	{
-		Network::Bundle* pForwardBundle = Network::Bundle::createPoolObject();
-		(*pForwardBundle).newMessage(CellappInterface::onUpdateGhostPropertys);
-		(*pForwardBundle) << id();
-		(*pForwardBundle) << propertyDescription->getUType();
-
-		pForwardBundle->append(*mstream);
-
 		GhostManager* gm = Cellapp::getSingleton().pGhostManager();
 		if(gm)
 		{
+			Network::Bundle* pForwardBundle = gm->createSendBundle(ghostCell());
+			(*pForwardBundle).newMessage(CellappInterface::onUpdateGhostPropertys);
+			(*pForwardBundle) << id();
+			(*pForwardBundle) << propertyDescription->getUType();
+
+			pForwardBundle->append(*mstream);
+
 			// 记录这个事件产生的数据量大小
 			g_publicCellEventHistoryStats.trackEvent(scriptName(), 
 				propertyDescription->getName(), 
 				pForwardBundle->currMsgLength());
 
 			gm->pushMessage(ghostCell(), pForwardBundle);
-		}
-		else
-		{
-			Network::Bundle::reclaimPoolObject(pForwardBundle);
 		}
 	}
 	
@@ -1524,6 +1529,9 @@ void Entity::onGetWitness(bool fromBase)
 		}
 	}
 
+	// 防止自己在一些脚本回调中被销毁，这里对自己做一次引用
+	Py_INCREF(this);
+
 	Space* space = Spaces::findSpace(this->spaceID());
 	if(space && space->isGood())
 	{
@@ -1568,6 +1576,8 @@ void Entity::onGetWitness(bool fromBase)
 		
 		clientMailbox()->postMail(pSendBundle);
 	}
+
+	Py_DECREF(this);
 }
 
 //-------------------------------------------------------------------------------------
@@ -2810,7 +2820,7 @@ void Entity::teleportRefMailbox(EntityMailbox* nearbyMBRef, Position3D& pos, Dir
 		Network::Channel* pBaseChannel = baseMailbox()->getChannel();
 		if(pBaseChannel)
 		{
-			addFlags(ENTITY_FLAGS_TELEPORTING);
+			addFlags(ENTITY_FLAGS_TELEPORT_START);
 
 			// 同时需要通知base暂存发往cellapp的消息，因为后面如果跳转成功需要切换cellMailbox映射关系到新的cellapp
 			// 为了避免在切换的一瞬间消息次序发生混乱(旧的cellapp消息也会转到新的cellapp上)， 因此需要在传送前进行
@@ -2890,7 +2900,6 @@ void Entity::teleportLocal(PyObject_ptr nearbyMBRef, Position3D& pos, Direction3
 
 		ENTITY_MESSAGE_FORWARD_CLIENT_END(pSendBundle, ClientInterface::onSetEntityPosAndDir, setEntityPosAndDir);
 		this->pWitness()->sendToClient(ClientInterface::onSetEntityPosAndDir, pSendBundle);
-		Network::Bundle::reclaimPoolObject(pSendBundle);
 	}
 
 	currspace->addEntityToNode(this);
@@ -2950,6 +2959,8 @@ void Entity::teleport(PyObject_ptr nearbyMBRef, Position3D& pos, Direction3D& di
 			4.2: 当前entity有base部分， 那么我们需要改变base所映射的cell部分(并且在未正式切换关系时baseapp上所有送达cell的消息都应该不被丢失)， 为了安全我们需要做一些工作
 	*/
 
+	Py_INCREF(this);
+
 	// 如果为None则是entity自己想在本space上跳转到某位置
 	if(nearbyMBRef == Py_None)
 	{
@@ -2993,6 +3004,8 @@ void Entity::teleport(PyObject_ptr nearbyMBRef, Position3D& pos, Direction3D& di
 			}
 		}
 	}
+	
+	Py_DECREF(this);
 }
 
 //-------------------------------------------------------------------------------------
@@ -3086,6 +3099,7 @@ void Entity::onRestore()
 	SCOPED_PROFILE(SCRIPTCALL_PROFILE);
 
 	SCRIPT_OBJECT_CALL_ARGS0(this, const_cast<char*>("onRestore"));
+	removeFlags(ENTITY_FLAGS_INITING);
 }
 
 //-------------------------------------------------------------------------------------
